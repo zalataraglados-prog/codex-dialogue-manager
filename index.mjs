@@ -50,13 +50,13 @@ function parseArgs(argv) {
           `  provider-sync  Migrate VS Code Codex sqlite threads.model_provider (fix history visibility).\n` +
           `  dialogues      Conversation manager (scan/stats/export-thread).\n\n` +
           `Capsule usage:\n` +
-          `  node tools/codex-capsule/index.mjs capsule --base upstream/main --head HEAD [--title "..."] [--notes notes.md]\n\n` +
+          `  node index.mjs capsule --base upstream/main --head HEAD [--title "..."] [--notes notes.md]\n\n` +
           `Provider-sync usage:\n` +
-          `  node tools/codex-capsule/index.mjs provider-sync --db <path-to-state.sqlite> --from openai --to newapi [--apply]\n\n` +
+          `  node index.mjs provider-sync --db <path-to-state.sqlite> --from openai --to newapi [--apply]\n\n` +
           `Dialogues usage (python backend):\n` +
-          `  python tools/codex-capsule/codex-dialogues.py scan --root ~/.codex\n` +
-          `  python tools/codex-capsule/codex-dialogues.py stats --db ~/.codex/state_5.sqlite --preview 20\n` +
-          `  python tools/codex-capsule/codex-dialogues.py export-thread --db ... --thread-id ... --out thread.md\n`
+          `  python codex-dialogues.py scan --root ~/.codex\n` +
+          `  python codex-dialogues.py stats --db ~/.codex/state_5.sqlite --preview 20\n` +
+          `  python codex-dialogues.py export-thread --db ... --thread-id ... --out thread.md\n`
       );
       process.exit(0);
     }

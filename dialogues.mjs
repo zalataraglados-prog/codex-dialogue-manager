@@ -14,7 +14,7 @@ function which(cmd) {
 
 export function dialogues(argv) {
   const repoTop = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
-  const pyScript = `${repoTop}/tools/codex-capsule/codex-dialogues.py`;
+  const pyScript = `${repoTop}/./codex-dialogues.py`;
 
   const py = which("python") ?? which("python3");
   if (!py) {

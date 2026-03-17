@@ -22,7 +22,7 @@ Given a git range, it produces:
 From repo root:
 
 ```bash
-node tools/codex-capsule/index.mjs capsule --base upstream/main --head HEAD
+node index.mjs capsule --base upstream/main --head HEAD
 ```
 
 If `base` and `head` point to the same commit, the tool will include **working-tree changes vs HEAD** instead of producing an empty capsule.
@@ -31,16 +31,16 @@ Common:
 
 ```bash
 # current branch vs upstream main
-node tools/codex-capsule/index.mjs capsule --base upstream/main --head HEAD
+node index.mjs capsule --base upstream/main --head HEAD
 
 # a named branch
-node tools/codex-capsule/index.mjs capsule --base upstream/main --head fix/codespaces-samesite-cookie
+node index.mjs capsule --base upstream/main --head fix/codespaces-samesite-cookie
 ```
 
 Optional:
 
 ```bash
-node tools/codex-capsule/index.mjs capsule --base upstream/main --head HEAD --title "Fix Codespaces Server Actions" --notes notes.md
+node index.mjs capsule --base upstream/main --head HEAD --title "Fix Codespaces Server Actions" --notes notes.md
 ```
 
 Then paste either:
@@ -61,7 +61,7 @@ This repo includes a helper that migrates the provider label in-place (backup-fi
 Preferred (wrapper):
 
 ```bash
-node tools/codex-capsule/index.mjs provider-sync \
+node index.mjs provider-sync \
   --db "C:\\Users\\<you>\\.codex\\state_5.sqlite" \
   --from openai --to newapi --apply
 ```
@@ -69,7 +69,7 @@ node tools/codex-capsule/index.mjs provider-sync \
 Direct (python):
 
 ```bash
-python tools/codex-capsule/provider-sync.py \
+python codex-dialogues.py provider-sync \
   --db "C:\\Users\\<you>\\.codex\\state_5.sqlite" \
   --from openai --to newapi --apply
 ```
@@ -83,25 +83,25 @@ This provides an inventory of local Codex conversations and where they live.
 List DBs under a state root:
 
 ```bash
-python tools/codex-capsule/codex-dialogues.py scan --root ~/.codex
+python codex-dialogues.py scan --root ~/.codex
 ```
 
 Provider distribution + preview:
 
 ```bash
-python tools/codex-capsule/codex-dialogues.py stats --db ~/.codex/state_5.sqlite --preview 20
+python codex-dialogues.py stats --db ~/.codex/state_5.sqlite --preview 20
 ```
 
 Export a thread (metadata + best-effort messages) to markdown:
 
 ```bash
-python tools/codex-capsule/codex-dialogues.py export-thread --db ~/.codex/state_5.sqlite --thread-id <id> --out ./thread.md
+python codex-dialogues.py export-thread --db ~/.codex/state_5.sqlite --thread-id <id> --out ./thread.md
 ```
 
 You can also invoke it via the Node wrapper:
 
 ```bash
-node tools/codex-capsule/index.mjs dialogues scan --root ~/.codex
+node index.mjs dialogues scan --root ~/.codex
 ```
 
 ## Notes
