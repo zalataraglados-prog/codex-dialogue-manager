@@ -7,6 +7,8 @@ Two small utilities to improve continuity when using Codex:
 
 ## What it does
 
+### Context Capsule
+
 Given a git range, it produces:
 
 - `./.codex-capsule/capsule.json` — structured capsule (for tooling)
@@ -48,6 +50,8 @@ Then paste either:
 
 ## 2) Provider-switch history visibility (VS Code Codex)
 
+**Schema safety:** the python backend checks that `threads` table and `model_provider` column exist before applying changes.
+
 Some Codex builds appear to filter the history list by `threads.model_provider`.
 If you switched provider (e.g. account OAuth → API key, or `openai` → `newapi`), older threads may still exist locally
 but become **invisible** in the UI.
@@ -71,6 +75,34 @@ python tools/codex-capsule/provider-sync.py \
 ```
 
 It will create a timestamped backup next to the DB file and only updates `threads.model_provider`.
+
+## 3) Dialogue manager (conversation inventory + export)
+
+This provides an inventory of local Codex conversations and where they live.
+
+List DBs under a state root:
+
+```bash
+python tools/codex-capsule/codex-dialogues.py scan --root ~/.codex
+```
+
+Provider distribution + preview:
+
+```bash
+python tools/codex-capsule/codex-dialogues.py stats --db ~/.codex/state_5.sqlite --preview 20
+```
+
+Export a thread (metadata + best-effort messages) to markdown:
+
+```bash
+python tools/codex-capsule/codex-dialogues.py export-thread --db ~/.codex/state_5.sqlite --thread-id <id> --out ./thread.md
+```
+
+You can also invoke it via the Node wrapper:
+
+```bash
+node tools/codex-capsule/index.mjs dialogues scan --root ~/.codex
+```
 
 ## Notes
 

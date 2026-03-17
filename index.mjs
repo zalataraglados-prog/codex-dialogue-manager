@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { providerSync } from "./provider-sync.mjs";
+import { dialogues } from "./dialogues.mjs";
 
 function sh(cmd) {
   return execSync(cmd, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }).trimEnd();
@@ -46,11 +47,16 @@ function parseArgs(argv) {
         `codex-tools (codex-capsule suite)\n\n` +
           `Commands:\n` +
           `  capsule        Export git range into a Context Capsule (seed + replay).\n` +
-          `  provider-sync  Migrate VS Code Codex sqlite threads.model_provider (fix history visibility).\n\n` +
+          `  provider-sync  Migrate VS Code Codex sqlite threads.model_provider (fix history visibility).\n` +
+          `  dialogues      Conversation manager (scan/stats/export-thread).\n\n` +
           `Capsule usage:\n` +
           `  node tools/codex-capsule/index.mjs capsule --base upstream/main --head HEAD [--title "..."] [--notes notes.md]\n\n` +
           `Provider-sync usage:\n` +
-          `  node tools/codex-capsule/index.mjs provider-sync --db <path-to-state.sqlite> --from openai --to newapi [--apply]\n`
+          `  node tools/codex-capsule/index.mjs provider-sync --db <path-to-state.sqlite> --from openai --to newapi [--apply]\n\n` +
+          `Dialogues usage (python backend):\n` +
+          `  python tools/codex-capsule/codex-dialogues.py scan --root ~/.codex\n` +
+          `  python tools/codex-capsule/codex-dialogues.py stats --db ~/.codex/state_5.sqlite --preview 20\n` +
+          `  python tools/codex-capsule/codex-dialogues.py export-thread --db ... --thread-id ... --out thread.md\n`
       );
       process.exit(0);
     }
@@ -79,6 +85,13 @@ function main() {
 
   if (args.cmd === "provider-sync") {
     return providerSync(args);
+  }
+
+  if (args.cmd === "dialogues") {
+    // Forward unknown args to the python backend. We re-parse from argv because
+    // parseArgs is command-specific.
+    const argv = process.argv.slice(3);
+    return dialogues(argv);
   }
 
   if (args.cmd !== "capsule") {

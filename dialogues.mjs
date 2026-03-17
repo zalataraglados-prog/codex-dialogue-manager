@@ -12,36 +12,16 @@ function which(cmd) {
   }
 }
 
-export function providerSync(args) {
-  if (!args.db || !args.fromProvider || !args.toProvider) {
-    throw new Error("provider-sync requires: --db <path> --from <provider> --to <provider> [--apply]");
-  }
-
+export function dialogues(argv) {
   const repoTop = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
   const pyScript = `${repoTop}/tools/codex-capsule/codex-dialogues.py`;
 
   const py = which("python") ?? which("python3");
   if (!py) {
-    console.log("python not found. You can run the SQL manually with sqlite tools:");
-    console.log("1) BACKUP the sqlite file");
-    console.log("2) UPDATE threads.model_provider\n");
-    console.log(`SQL: update threads set model_provider='${args.toProvider}' where model_provider='${args.fromProvider}';`);
-    return;
+    throw new Error("python not found; dialogues manager requires python (stdlib sqlite3)");
   }
 
-  const cmd = [
-    py,
-    pyScript,
-    "provider-sync",
-    "--db",
-    args.db,
-    "--from",
-    args.fromProvider,
-    "--to",
-    args.toProvider,
-  ];
-  if (args.apply) cmd.push("--apply");
-
+  const cmd = [py, pyScript, ...argv];
   execSync(cmd.map(quote).join(" "), { stdio: "inherit" });
 }
 
