@@ -2,13 +2,34 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { providerSync } from "./provider-sync.mjs";
 
 function sh(cmd) {
   return execSync(cmd, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }).trimEnd();
 }
 
 function parseArgs(argv) {
-  const out = { base: "upstream/main", head: "HEAD", title: "Context Capsule", notes: null, maxDiffChars: 18000 };
+  // command: capsule | provider-sync
+  const out = {
+    cmd: "capsule",
+    base: "upstream/main",
+    head: "HEAD",
+    title: "Context Capsule",
+    notes: null,
+    maxDiffChars: 18000,
+    // provider-sync
+    db: null,
+    fromProvider: null,
+    toProvider: null,
+    apply: false,
+  };
+
+  const first = argv[0];
+  if (first && !first.startsWith("-")) {
+    out.cmd = first;
+    argv = argv.slice(1);
+  }
+
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--base") out.base = argv[++i];
@@ -16,8 +37,21 @@ function parseArgs(argv) {
     else if (a === "--title") out.title = argv[++i];
     else if (a === "--notes") out.notes = argv[++i];
     else if (a === "--max-diff-chars") out.maxDiffChars = Number(argv[++i] ?? out.maxDiffChars);
+    else if (a === "--db") out.db = argv[++i];
+    else if (a === "--from") out.fromProvider = argv[++i];
+    else if (a === "--to") out.toProvider = argv[++i];
+    else if (a === "--apply") out.apply = true;
     else if (a === "-h" || a === "--help") {
-      console.log(`codex-capsule\n\nUsage:\n  node tools/codex-capsule/index.mjs --base upstream/main --head HEAD [--title \"...\"] [--notes notes.md]\n`);
+      console.log(
+        `codex-tools (codex-capsule suite)\n\n` +
+          `Commands:\n` +
+          `  capsule        Export git range into a Context Capsule (seed + replay).\n` +
+          `  provider-sync  Migrate VS Code Codex sqlite threads.model_provider (fix history visibility).\n\n` +
+          `Capsule usage:\n` +
+          `  node tools/codex-capsule/index.mjs capsule --base upstream/main --head HEAD [--title "..."] [--notes notes.md]\n\n` +
+          `Provider-sync usage:\n` +
+          `  node tools/codex-capsule/index.mjs provider-sync --db <path-to-state.sqlite> --from openai --to newapi [--apply]\n`
+      );
       process.exit(0);
     }
   }
@@ -43,38 +77,59 @@ function readOptional(filePath) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
 
+  if (args.cmd === "provider-sync") {
+    return providerSync(args);
+  }
+
+  if (args.cmd !== "capsule") {
+    throw new Error(`unknown command: ${args.cmd}`);
+  }
+
   // Basic repo metadata
   const repoTop = sh("git rev-parse --show-toplevel");
   const originUrl = sh("git remote get-url origin");
+  const branch = sh("git branch --show-current || true");
+  const status = sh("git status --porcelain=v1 || true");
 
   // Resolve refs
   const baseSha = sh(`git rev-parse ${args.base}`);
   const headSha = sh(`git rev-parse ${args.head}`);
 
-  const changedFiles = sh(`git diff --name-only ${baseSha}..${headSha}`)
+  // Fix: when base==head, exporting base..head would be empty and misleading.
+  // In that case, include working-tree changes vs HEAD.
+  const isEmptyRange = baseSha === headSha;
+  const diffRange = isEmptyRange ? `HEAD` : `${baseSha}..${headSha}`;
+
+  const changedFiles = sh(`git diff --name-only ${diffRange}`)
     .split("\n")
     .filter(Boolean);
 
-  const shortlog = sh(`git log --oneline --decorate -n 20 ${baseSha}..${headSha} || true`);
+  const shortlog = isEmptyRange
+    ? sh(`git log --oneline --decorate -n 20 ${headSha} || true`)
+    : sh(`git log --oneline --decorate -n 20 ${baseSha}..${headSha} || true`);
 
-  const diff = sh(`git diff ${baseSha}..${headSha}`);
+  const diff = sh(`git diff ${diffRange}`);
   const diffTrunc = trunc(diff, args.maxDiffChars);
 
   const notes = readOptional(args.notes);
 
   const capsule = {
     tool: "codex-capsule",
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     repo: {
       top: repoTop,
       origin: originUrl,
+      branch,
+      status,
     },
     range: {
       base: args.base,
       baseSha,
       head: args.head,
       headSha,
+      emptyRange: isEmptyRange,
+      diffRange,
     },
     title: args.title,
     notes,
