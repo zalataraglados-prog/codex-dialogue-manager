@@ -1,0 +1,24 @@
+{
+  "tool": "codex-capsule",
+  "version": 2,
+  "generatedAt": "2026-03-18T01:53:43.051Z",
+  "repo": {
+    "top": "/home/runner/work/codex-dialogue-manager/codex-dialogue-manager",
+    "origin": "https://github.com/zalataraglados-prog/codex-dialogue-manager",
+    "branch": "copilot/check-project-completeness",
+    "status": "?? __pycache__/"
+  },
+  "range": {
+    "base": "HEAD",
+    "baseSha": "c809ca25cf4f611cddd62159c2e1c3d120acd8c8",
+    "head": "HEAD",
+    "headSha": "c809ca25cf4f611cddd62159c2e1c3d120acd8c8",
+    "emptyRange": true,
+    "diffRange": "HEAD"
+  },
+  "title": "Context Capsule",
+  "notes": null,
+  "changedFiles": [],
+  "shortlog": "c809ca2 (HEAD -> copilot/check-project-completeness, origin/copilot/check-project-completeness) Initial plan\na666032 (grafted) Docs: update usage paths for standalone codex-dialogue-manager repo (#2)",
+  "diff": ""
+}
