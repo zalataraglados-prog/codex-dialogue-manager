@@ -1,0 +1,15 @@
+{
+  "name": "codex-dialogue-manager",
+  "version": "1.0.0",
+  "description": "Utilities for improving continuity when using VS Code Codex: context capsule, provider sync, and dialogue manager.",
+  "type": "module",
+  "bin": {
+    "codex-tools": "./index.mjs"
+  },
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

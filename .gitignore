@@ -1,0 +1,10 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated capsule output
+.codex-capsule/
+
+# Node.js dependencies
+node_modules/
