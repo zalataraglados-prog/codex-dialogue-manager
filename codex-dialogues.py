@@ -237,7 +237,9 @@ def cmd_export_thread(args: argparse.Namespace) -> int:
                 d = {pick[i]: ("" if r[i] is None else str(r[i])) for i in range(len(pick))}
                 messages.append(d)
 
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    out_dir = os.path.dirname(out)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         f.write(f"# Codex thread export: {args.thread_id}\n\n")
         f.write(f"DB: {db}\n\n")
