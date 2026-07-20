@@ -27,10 +27,9 @@ import json
 import datetime as _dt
 import glob
 import os
-import shutil
 import sqlite3
 from collections import Counter
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 def _ts() -> str:
@@ -158,6 +157,34 @@ def _event_type(event: Dict[str, object]) -> str:
     return "unknown"
 
 
+def _text_from_content(content: object, allowed_types: Optional[set[str]] = None) -> List[str]:
+    out: List[str] = []
+    if isinstance(content, str):
+        t = content.strip()
+        if t:
+            out.append(t)
+        return out
+    if not isinstance(content, list):
+        return out
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        p_type = str(part.get("type", "")).strip().lower()
+        if allowed_types and p_type not in allowed_types:
+            continue
+        val = part.get("text")
+        if isinstance(val, str) and val.strip():
+            out.append(val.strip())
+    return out
+
+
+def _with_raw(item: Dict[str, Any], raw_obj: Dict[str, Any], include_raw: bool) -> Dict[str, Any]:
+    if include_raw:
+        item = dict(item)
+        item["raw"] = raw_obj
+    return item
+
+
 def _legacy_messages(conn: sqlite3.Connection, thread_id: str) -> Tuple[Optional[str], List[Dict[str, str]]]:
     tables = [r[0] for r in conn.execute("select name from sqlite_master where type='table' order by name").fetchall()]
     msg_table = None
@@ -190,14 +217,17 @@ def _legacy_messages(conn: sqlite3.Connection, thread_id: str) -> Tuple[Optional
     return msg_table, messages
 
 
-def _parse_rollout_jsonl(path: str) -> Dict[str, object]:
+def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, object]:
     parsed: Dict[str, object] = {
         "events_total": 0,
+        "session_meta": [],
+        "turn_context": [],
         "user_messages": [],
         "assistant_messages": [],
         "tool_calls": [],
         "tool_outputs": [],
-        "compaction_items": [],
+        "envelope_counts": {},
+        "unknown_envelopes": [],
         "unknown_events": [],
     }
     with open(path, "r", encoding="utf-8") as f:
@@ -216,22 +246,187 @@ def _parse_rollout_jsonl(path: str) -> Dict[str, object]:
                 parsed["unknown_events"].append({"line": idx, "type": "non_object", "value": repr(obj)})
                 continue
 
-            et = _event_type(obj).lower()
-            role = str(obj.get("role", "")).lower()
-            item = {"line": idx, "event_type": _event_type(obj), "event": obj}
+            envelope_type = str(obj.get("type", "")).strip()
+            if not envelope_type:
+                parsed["unknown_events"].append(
+                    _with_raw({"line": idx, "reason": "missing_envelope_type"}, obj, include_raw)
+                )
+                continue
 
-            if role == "user" or et in {"user_message", "message.user", "user", "user_input"}:
-                parsed["user_messages"].append(item)
-            elif role == "assistant" or et in {"assistant_message", "message.assistant", "assistant"}:
-                parsed["assistant_messages"].append(item)
-            elif "tool_call" in et or "function_call" in et or "toolcall" in et or "tool_calls" in obj:
-                parsed["tool_calls"].append(item)
-            elif "tool_output" in et or "tool_result" in et or "function_result" in et:
-                parsed["tool_outputs"].append(item)
-            elif "compact" in et or "compaction" in et or "summary" in et:
-                parsed["compaction_items"].append(item)
-            else:
-                parsed["unknown_events"].append(item)
+            envelope_counts = parsed["envelope_counts"]
+            assert isinstance(envelope_counts, dict)
+            envelope_counts[envelope_type] = int(envelope_counts.get(envelope_type, 0)) + 1
+
+            payload = obj.get("payload")
+            payload_type = str(payload.get("type", "")).strip() if isinstance(payload, dict) else ""
+
+            if envelope_type == "session_meta":
+                item = {"line": idx, "envelope_type": envelope_type, "payload_type": payload_type}
+                parsed["session_meta"].append(_with_raw(item, obj, include_raw))
+                continue
+
+            if envelope_type == "turn_context":
+                item = {
+                    "line": idx,
+                    "envelope_type": envelope_type,
+                    "payload_type": payload_type,
+                    "summary": payload.get("summary", "") if isinstance(payload, dict) else "",
+                }
+                parsed["turn_context"].append(_with_raw(item, obj, include_raw))
+                continue
+
+            if envelope_type == "event_msg":
+                if not isinstance(payload, dict):
+                    parsed["unknown_envelopes"].append(
+                        _with_raw({"line": idx, "envelope_type": envelope_type, "reason": "non_object_payload"}, obj, include_raw)
+                    )
+                    continue
+                pt = str(payload.get("type", "")).strip().lower()
+                if pt == "user_message":
+                    text = str(payload.get("message", "")).strip()
+                    if text:
+                        parsed["user_messages"].append(
+                            _with_raw(
+                                {"line": idx, "source": "event_msg", "payload_type": pt, "text": text},
+                                obj,
+                                include_raw,
+                            )
+                        )
+                    continue
+                if pt in {"assistant_message", "assistant_response"}:
+                    text = str(payload.get("message", "")).strip()
+                    if text:
+                        parsed["assistant_messages"].append(
+                            _with_raw(
+                                {"line": idx, "source": "event_msg", "payload_type": pt, "text": text},
+                                obj,
+                                include_raw,
+                            )
+                        )
+                    continue
+                if pt in {"function_call", "tool_call"}:
+                    parsed["tool_calls"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "event_msg",
+                                "payload_type": pt,
+                                "name": str(payload.get("name", payload.get("tool_name", ""))).strip(),
+                                "arguments": payload.get("arguments"),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                if pt in {"function_call_output", "tool_output", "tool_result"}:
+                    parsed["tool_outputs"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "event_msg",
+                                "payload_type": pt,
+                                "name": str(payload.get("name", payload.get("tool_name", ""))).strip(),
+                                "output": payload.get("output", payload.get("result")),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                parsed["unknown_envelopes"].append(
+                    _with_raw(
+                        {"line": idx, "envelope_type": envelope_type, "payload_type": pt, "reason": "unknown_event_msg_payload"},
+                        obj,
+                        include_raw,
+                    )
+                )
+                continue
+
+            if envelope_type == "response_item":
+                if not isinstance(payload, dict):
+                    parsed["unknown_envelopes"].append(
+                        _with_raw({"line": idx, "envelope_type": envelope_type, "reason": "non_object_payload"}, obj, include_raw)
+                    )
+                    continue
+                pt = str(payload.get("type", "")).strip().lower()
+                if pt == "message":
+                    role = str(payload.get("role", "")).strip().lower()
+                    input_chunks = _text_from_content(payload.get("content"), {"input_text"})
+                    output_chunks = _text_from_content(payload.get("content"), {"output_text"})
+                    fallback_chunks = _text_from_content(payload.get("content"), None)
+                    chunks = input_chunks or output_chunks or fallback_chunks
+                    if not chunks:
+                        continue
+                    target = None
+                    if role == "user":
+                        target = "user_messages"
+                    elif role == "assistant":
+                        target = "assistant_messages"
+                    if target:
+                        for text in chunks:
+                            parsed[target].append(
+                                _with_raw(
+                                    {"line": idx, "source": "response_item", "payload_type": pt, "role": role, "text": text},
+                                    obj,
+                                    include_raw,
+                                )
+                            )
+                    else:
+                        parsed["unknown_envelopes"].append(
+                            _with_raw(
+                                {"line": idx, "envelope_type": envelope_type, "payload_type": pt, "reason": "unknown_message_role"},
+                                obj,
+                                include_raw,
+                            )
+                        )
+                    continue
+                if pt in {"function_call", "tool_call"}:
+                    parsed["tool_calls"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "response_item",
+                                "payload_type": pt,
+                                "name": str(payload.get("name", payload.get("tool_name", ""))).strip(),
+                                "arguments": payload.get("arguments"),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                if pt in {"function_call_output", "tool_output", "tool_result"}:
+                    parsed["tool_outputs"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "response_item",
+                                "payload_type": pt,
+                                "name": str(payload.get("name", payload.get("tool_name", ""))).strip(),
+                                "output": payload.get("output", payload.get("result")),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                parsed["unknown_envelopes"].append(
+                    _with_raw(
+                        {"line": idx, "envelope_type": envelope_type, "payload_type": pt, "reason": "unknown_response_item_payload"},
+                        obj,
+                        include_raw,
+                    )
+                )
+                continue
+
+            parsed["unknown_envelopes"].append(
+                _with_raw(
+                    {"line": idx, "envelope_type": envelope_type, "payload_type": payload_type, "reason": "unknown_envelope_type"},
+                    obj,
+                    include_raw,
+                )
+            )
 
     return parsed
 
@@ -266,15 +461,21 @@ def _threads_preview(conn: sqlite3.Connection, limit: int = 20) -> List[Dict[str
         "history_mode",
         "source",
         "thread_source",
+        "memory_mode",
         "archived",
         "cli_version",
         "model",
         "rollout_path",
+        "tokens_used",
+        "has_user_event",
+        "first_user_message",
+        "preview",
+        "created_at_ms",
+        "updated_at_ms",
+        "recency_at",
+        "recency_at_ms",
         "updated_at",
         "created_at",
-        "last_used_at",
-        "recency",
-        "recency_score",
     ]:
         if c in cols:
             select_cols.append(c)
@@ -297,7 +498,17 @@ def _threads_preview(conn: sqlite3.Connection, limit: int = 20) -> List[Dict[str
 
 def _backup_db(db_path: str) -> str:
     bak = f"{db_path}.bak-codex-dialogues-{_ts()}"
-    shutil.copy2(db_path, bak)
+    with sqlite3.connect(db_path) as src, sqlite3.connect(bak) as dst:
+        try:
+            src.execute("pragma wal_checkpoint(full)")
+        except sqlite3.DatabaseError:
+            pass
+        src.backup(dst)
+        dst.commit()
+    with sqlite3.connect(bak) as bconn:
+        qc = bconn.execute("pragma quick_check").fetchone()
+        if not qc or str(qc[0]).lower() != "ok":
+            raise SystemExit(f"backup verification failed: quick_check={qc!r}")
     return bak
 
 
@@ -323,7 +534,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
             label = p if p else "(NULL/empty)"
             print(f"  {label}: {c}")
 
-        for c in ["source", "thread_source", "history_mode", "archived", "cli_version", "model"]:
+        for c in ["source", "thread_source", "history_mode", "archived", "cli_version", "model", "memory_mode", "has_user_event"]:
             if c in cols:
                 print(f"\n{c} distribution:")
                 d = _distribution(conn, "threads", c)
@@ -392,13 +603,9 @@ def cmd_provider_sync(args: argparse.Namespace) -> int:
             return 0
 
     print("IMPORTANT: close VS Code before applying.")
-    orig_size = os.path.getsize(db)
     bak = _backup_db(db)
     if not os.path.isfile(bak):
         raise SystemExit(f"backup verification failed: not found {bak}")
-    bak_size = os.path.getsize(bak)
-    if orig_size != bak_size:
-        raise SystemExit(f"backup verification failed: size mismatch original={orig_size} backup={bak_size}")
     print(f"backup written: {bak}")
 
     with _conn(db) as conn2:
@@ -450,7 +657,7 @@ def cmd_export_thread(args: argparse.Namespace) -> int:
         elif resolved:
             rollout_info["rollout_resolved"] = resolved
             if os.path.isfile(resolved):
-                rollout_parsed = _parse_rollout_jsonl(resolved)
+                rollout_parsed = _parse_rollout_jsonl(resolved, include_raw=args.include_raw)
             else:
                 rollout_info["rollout_missing"] = "true"
 
@@ -474,19 +681,23 @@ def cmd_export_thread(args: argparse.Namespace) -> int:
         if rollout_parsed is not None:
             f.write("\n## Rollout summary\n\n")
             f.write(f"- events_total: {rollout_parsed['events_total']}\n")
+            f.write(f"- session_meta: {len(rollout_parsed['session_meta'])}\n")
+            f.write(f"- turn_context: {len(rollout_parsed['turn_context'])}\n")
             f.write(f"- user_messages: {len(rollout_parsed['user_messages'])}\n")
             f.write(f"- assistant_messages: {len(rollout_parsed['assistant_messages'])}\n")
             f.write(f"- tool_calls: {len(rollout_parsed['tool_calls'])}\n")
             f.write(f"- tool_outputs: {len(rollout_parsed['tool_outputs'])}\n")
-            f.write(f"- compaction_items: {len(rollout_parsed['compaction_items'])}\n")
+            f.write(f"- unknown_envelopes: {len(rollout_parsed['unknown_envelopes'])}\n")
             f.write(f"- unknown_events: {len(rollout_parsed['unknown_events'])}\n")
 
             for section, key in [
+                ("Session meta", "session_meta"),
+                ("Turn context", "turn_context"),
                 ("User messages", "user_messages"),
                 ("Assistant messages", "assistant_messages"),
                 ("Tool calls", "tool_calls"),
                 ("Tool outputs", "tool_outputs"),
-                ("Compaction items", "compaction_items"),
+                ("Unknown envelopes", "unknown_envelopes"),
                 ("Unknown events", "unknown_events"),
             ]:
                 items = rollout_parsed[key]
@@ -498,6 +709,12 @@ def cmd_export_thread(args: argparse.Namespace) -> int:
                     f.write("```json\n")
                     f.write(json.dumps(item, ensure_ascii=False, indent=2))
                     f.write("\n```\n\n")
+            if args.include_raw:
+                f.write("\n## Privacy warning\n\n")
+                f.write(
+                    "Raw event JSON was included because --include-raw was set. "
+                    "Raw data may contain local paths, tool outputs, and secrets.\n"
+                )
         else:
             f.write("\n## Rollout summary\n\n")
             f.write("No readable rollout file for this thread.\n")
@@ -605,6 +822,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_exp.add_argument("--db", required=True)
     p_exp.add_argument("--thread-id", required=True)
     p_exp.add_argument("--out", required=True, help="Output markdown path")
+    p_exp.add_argument(
+        "--include-raw",
+        action="store_true",
+        help="Include raw rollout event JSON (may contain paths, tool outputs, and secrets)",
+    )
     p_exp.set_defaults(fn=cmd_export_thread)
 
     p_doc = sub.add_parser("doctor", help="Audit threads schema and rollout file consistency (read-only)")

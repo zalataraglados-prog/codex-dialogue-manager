@@ -24,14 +24,37 @@ def run_cli(args):
 def write_rollout(path: Path, include_unknown: bool = False):
     path.parent.mkdir(parents=True, exist_ok=True)
     events = [
-        {"type": "user_message", "role": "user", "content": "hello"},
-        {"type": "assistant_message", "role": "assistant", "content": "world"},
-        {"type": "tool_call", "tool_name": "search", "arguments": {"q": "x"}},
-        {"type": "tool_output", "tool_name": "search", "output": "ok"},
-        {"type": "compaction_item", "summary": "compact"},
+        {"timestamp": "2026-07-20T00:00:00Z", "type": "session_meta", "payload": {"model": "gpt-4.1", "cwd": "/tmp/repo"}},
+        {
+            "timestamp": "2026-07-20T00:00:01Z",
+            "type": "response_item",
+            "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello from input_text"}]},
+        },
+        {
+            "timestamp": "2026-07-20T00:00:02Z",
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "hello from event_msg", "kind": "plain"},
+        },
+        {
+            "timestamp": "2026-07-20T00:00:03Z",
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "assistant output_text"}]},
+        },
+        {
+            "timestamp": "2026-07-20T00:00:04Z",
+            "type": "response_item",
+            "payload": {"type": "function_call", "name": "search", "arguments": {"q": "x"}},
+        },
+        {
+            "timestamp": "2026-07-20T00:00:05Z",
+            "type": "response_item",
+            "payload": {"type": "function_call_output", "name": "search", "output": "ok"},
+        },
+        {"timestamp": "2026-07-20T00:00:06Z", "type": "turn_context", "payload": {"summary": "compact"}},
     ]
     if include_unknown:
-        events.append({"type": "mystery_event", "payload": "??"})
+        events.append({"timestamp": "2026-07-20T00:00:07Z", "type": "mystery_event", "payload": {"x": "??"}})
+        events.append({"timestamp": "2026-07-20T00:00:08Z", "type": "response_item", "payload": {"type": "mystery_payload", "value": "??"}})
     with path.open("w", encoding="utf-8") as f:
         for e in events:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
@@ -57,37 +80,37 @@ def create_legacy_db(path: Path):
 def create_current_db(path: Path, rel_rollout: str, abs_rollout: str, missing_rollout: str):
     col_defs = [
         "id text primary key",
-        "title text",
-        "name text",
-        "model_provider text",
         "rollout_path text",
-        "history_mode text",
-        "source text",
-        "thread_source text",
-        "archived integer",
-        "cli_version text",
-        "model text",
-        "updated_at text",
         "created_at text",
-        "last_used_at text",
-        "recency_score real",
-        "c16 text",
-        "c17 text",
-        "c18 text",
-        "c19 text",
-        "c20 text",
-        "c21 text",
-        "c22 text",
-        "c23 text",
-        "c24 text",
-        "c25 text",
-        "c26 text",
-        "c27 text",
-        "c28 text",
-        "c29 text",
-        "c30 text",
-        "c31 text",
-        "c32 text",
+        "updated_at text",
+        "source text",
+        "model_provider text",
+        "cwd text",
+        "title text",
+        "sandbox_policy text",
+        "approval_mode text",
+        "tokens_used integer",
+        "has_user_event integer",
+        "archived integer",
+        "archived_at text",
+        "git_sha text",
+        "git_branch text",
+        "git_origin_url text",
+        "cli_version text",
+        "first_user_message text",
+        "agent_nickname text",
+        "agent_role text",
+        "memory_mode text",
+        "model text",
+        "reasoning_effort text",
+        "agent_path text",
+        "created_at_ms integer",
+        "updated_at_ms integer",
+        "thread_source text",
+        "preview text",
+        "recency_at text",
+        "recency_at_ms integer",
+        "history_mode text",
     ]
     assert len(col_defs) == 32
     with sqlite3.connect(path) as conn:
@@ -103,26 +126,47 @@ def create_current_db(path: Path, rel_rollout: str, abs_rollout: str, missing_ro
             conn.execute(
                 """
                 insert into threads (
-                  id, title, name, model_provider, rollout_path, history_mode, source, thread_source, archived,
-                  cli_version, model, updated_at, created_at, last_used_at, recency_score
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                  title, sandbox_policy, approval_mode, tokens_used, has_user_event,
+                  archived, archived_at, git_sha, git_branch, git_origin_url, cli_version,
+                  first_user_message, agent_nickname, agent_role, memory_mode, model,
+                  reasoning_effort, agent_path, created_at_ms, updated_at_ms, thread_source,
+                  preview, recency_at, recency_at_ms, history_mode
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tid,
-                    f"title-{tid}",
-                    f"name-{tid}",
-                    provider,
                     rollout,
-                    mode,
-                    source,
-                    thread_source,
-                    archived,
-                    cli_version,
-                    model,
-                    "2026-07-20T00:00:00Z",
                     "2026-07-19T00:00:00Z",
+                    "2026-07-20T00:00:00Z",
+                    source,
+                    provider,
+                    "/tmp/repo",
+                    f"title-{tid}",
+                    "workspace-write",
+                    "on-request",
+                    321,
+                    1 if tid != "t-other" else 0,
+                    archived,
+                    "" if not archived else "2026-07-21T00:00:00Z",
+                    "abc123",
+                    "feature/test",
+                    "https://github.com/example/repo.git",
+                    cli_version,
+                    f"first-{tid}",
+                    "codex",
+                    "assistant",
+                    mode,
+                    model,
+                    "medium",
+                    "/agents/codex",
+                    1721433600000,
+                    1721520000000,
+                    thread_source,
+                    f"preview-{tid}",
                     "2026-07-20T01:00:00Z",
-                    0.5,
+                    1721523600000,
+                    mode,
                 ),
             )
         conn.execute(
@@ -177,7 +221,18 @@ class CodexDialoguesFixtureTests(unittest.TestCase):
         self.assertIn("archived distribution:", result.stdout)
         self.assertIn("cli_version distribution:", result.stdout)
         self.assertIn("model distribution:", result.stdout)
+        self.assertIn("memory_mode distribution:", result.stdout)
+        self.assertIn("has_user_event distribution:", result.stdout)
         self.assertIn("rollout_exists=yes", result.stdout)
+        self.assertIn("created_at_ms=", result.stdout)
+        self.assertIn("updated_at_ms=", result.stdout)
+        self.assertIn("recency_at=", result.stdout)
+        self.assertIn("recency_at_ms=", result.stdout)
+        self.assertIn("preview=", result.stdout)
+        self.assertIn("first_user_message=", result.stdout)
+        self.assertIn("tokens_used=", result.stdout)
+        self.assertIn("has_user_event=", result.stdout)
+        self.assertIn("memory_mode=", result.stdout)
 
     def test_export_thread_parses_relative_rollout_and_unknown_events(self):
         out = self.root / "out-rel.md"
@@ -189,9 +244,12 @@ class CodexDialoguesFixtureTests(unittest.TestCase):
         self.assertIn("## Assistant messages", content)
         self.assertIn("## Tool calls", content)
         self.assertIn("## Tool outputs", content)
-        self.assertIn("## Compaction items", content)
-        self.assertIn("## Unknown events", content)
+        self.assertIn("## Turn context", content)
+        self.assertIn("## Unknown envelopes", content)
         self.assertIn("mystery_event", content)
+        self.assertIn("hello from input_text", content)
+        self.assertIn("assistant output_text", content)
+        self.assertNotIn("\"raw\":", content)
 
     def test_export_thread_parses_absolute_rollout(self):
         out = self.root / "out-abs.md"
@@ -200,6 +258,25 @@ class CodexDialoguesFixtureTests(unittest.TestCase):
         content = out.read_text(encoding="utf-8")
         self.assertIn(str(self.abs_rollout_path), content)
         self.assertIn("events_total", content)
+
+    def test_export_thread_include_raw_adds_warning_and_raw_payload(self):
+        out = self.root / "out-rel-raw.md"
+        result = run_cli(
+            [
+                "export-thread",
+                "--db",
+                str(self.db_current),
+                "--thread-id",
+                "t-rel",
+                "--out",
+                str(out),
+                "--include-raw",
+            ]
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr + "\n" + result.stdout)
+        content = out.read_text(encoding="utf-8")
+        self.assertIn("## Privacy warning", content)
+        self.assertIn("\"raw\":", content)
 
     def test_export_thread_legacy_fallback(self):
         out = self.root / "out-legacy.md"
