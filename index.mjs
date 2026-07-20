@@ -37,7 +37,10 @@ function parseArgs(argv) {
     else if (a === "--head") out.head = argv[++i];
     else if (a === "--title") out.title = argv[++i];
     else if (a === "--notes") out.notes = argv[++i];
-    else if (a === "--max-diff-chars") out.maxDiffChars = Number(argv[++i] ?? out.maxDiffChars);
+    else if (a === "--max-diff-chars") {
+      const value = Number(argv[++i]);
+      if (Number.isFinite(value) && value > 0) out.maxDiffChars = value;
+    }
     else if (a === "--db") out.db = argv[++i];
     else if (a === "--from") out.fromProvider = argv[++i];
     else if (a === "--to") out.toProvider = argv[++i];
@@ -100,7 +103,7 @@ function main() {
 
   // Basic repo metadata
   const repoTop = sh("git rev-parse --show-toplevel");
-  const originUrl = sh("git remote get-url origin");
+  const originUrl = sh("git remote get-url origin || true");
   const branch = sh("git branch --show-current || true");
   const status = sh("git status --porcelain=v1 || true");
 
@@ -132,7 +135,7 @@ function main() {
     generatedAt: new Date().toISOString(),
     repo: {
       top: repoTop,
-      origin: originUrl,
+      origin: originUrl || "(no origin remote)",
       branch,
       status,
     },

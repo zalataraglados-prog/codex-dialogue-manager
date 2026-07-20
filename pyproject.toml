@@ -1,0 +1,5 @@
+[project]
+name = "codex-dialogue-manager"
+version = "1.0.0"
+description = "Utilities for Codex context capsule, provider sync, and dialogue management."
+requires-python = ">=3.10"

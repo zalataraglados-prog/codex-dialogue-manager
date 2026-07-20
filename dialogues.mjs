@@ -16,7 +16,7 @@ export function dialogues(argv) {
   const repoTop = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
   const pyScript = `${repoTop}/./codex-dialogues.py`;
 
-  const py = which("python") ?? which("python3");
+  const py = which("python3") ?? which("python");
   if (!py) {
     throw new Error("python not found; dialogues manager requires python (stdlib sqlite3)");
   }

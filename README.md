@@ -5,6 +5,17 @@ Two small utilities to improve continuity when using Codex:
 1) **Context Capsule**: export high-signal context from git (base → head) into pasteable messages.
 2) **Provider Sync**: fix VS Code Codex history visibility after switching model providers.
 
+## Requirements
+
+- Node.js 20+
+- Python 3.10+
+
+Install JavaScript tooling metadata:
+
+```bash
+npm install
+```
+
 ## What it does
 
 ### Context Capsule
