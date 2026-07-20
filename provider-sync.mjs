@@ -20,7 +20,7 @@ export function providerSync(args) {
   const repoTop = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
   const pyScript = `${repoTop}/./codex-dialogues.py`;
 
-  const py = which("python") ?? which("python3");
+  const py = which("python3") ?? which("python");
   if (!py) {
     console.log("python not found. You can run the SQL manually with sqlite tools:");
     console.log("1) BACKUP the sqlite file");

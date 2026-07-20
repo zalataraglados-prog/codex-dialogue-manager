@@ -5,6 +5,17 @@ Two small utilities to improve continuity when using Codex:
 1) **Context Capsule**: export high-signal context from git (base → head) into pasteable messages.
 2) **Provider Sync**: fix VS Code Codex history visibility after switching model providers.
 
+## Requirements
+
+- Node.js 20+
+- Python 3.10+
+
+Install JavaScript tooling metadata:
+
+```bash
+npm install
+```
+
 ## What it does
 
 ### Context Capsule
@@ -80,6 +91,12 @@ It will create a timestamped backup next to the DB file and only updates `thread
 
 This provides an inventory of local Codex conversations and where they live.
 
+Run a read-only storage compatibility audit:
+
+```bash
+python codex-dialogues.py doctor --root ~/.codex
+```
+
 List DBs under a state root:
 
 ```bash
@@ -97,6 +114,8 @@ Export a thread (metadata + best-effort messages) to markdown:
 ```bash
 python codex-dialogues.py export-thread --db ~/.codex/state_5.sqlite --thread-id <id> --out ./thread.md
 ```
+
+`export-thread` will first use `threads.rollout_path` JSONL data when available, and then retain a legacy DB fallback (`messages`/`turns`/`events`).
 
 You can also invoke it via the Node wrapper:
 
