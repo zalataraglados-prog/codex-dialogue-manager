@@ -58,6 +58,7 @@ function parseArgs(argv) {
           `  node index.mjs provider-sync --db <path-to-state.sqlite> --from openai --to newapi [--apply]\n\n` +
           `Dialogues usage (python backend):\n` +
           `  python codex-dialogues.py scan --root ~/.codex\n` +
+          `  python codex-dialogues.py doctor --root ~/.codex\n` +
           `  python codex-dialogues.py stats --db ~/.codex/state_5.sqlite --preview 20\n` +
           `  python codex-dialogues.py export-thread --db ... --thread-id ... --out thread.md\n`
       );
