@@ -29,6 +29,7 @@ import glob
 import os
 import sqlite3
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
@@ -40,23 +41,34 @@ def _expand(p: str) -> str:
     return os.path.abspath(os.path.expanduser(p))
 
 
-def _find_state_dbs(root: str) -> List[str]:
+def _find_state_dbs(root: str, *, audit_mode: bool = False) -> List[str]:
     root = _expand(root)
     if not os.path.isdir(root):
         return []
-    # Common filenames: state_5.sqlite, state.sqlite, etc.
-    pats = ["state_*.sqlite", "state.sqlite", "*.sqlite"]
+    # Audit mode intentionally stays narrow to avoid unrelated sqlite files.
+    if audit_mode:
+        pats = [os.path.join(root, "state*.sqlite"), os.path.join(root, "sqlite", "**", "*.sqlite")]
+    else:
+        pats = [
+            os.path.join(root, "state_*.sqlite"),
+            os.path.join(root, "state.sqlite"),
+            os.path.join(root, "*.sqlite"),
+        ]
     out: List[str] = []
     for pat in pats:
-        out.extend(glob.glob(os.path.join(root, pat)))
+        out.extend(glob.glob(pat, recursive=True))
     # keep only files
     out = [p for p in out if os.path.isfile(p)]
+    out = sorted(set(os.path.abspath(p) for p in out))
     # stable sort: prefer state_*.sqlite
     out.sort(key=lambda p: (0 if os.path.basename(p).startswith("state_") else 1, p))
     return out
 
 
-def _conn(db: str) -> sqlite3.Connection:
+def _conn(db: str, *, read_only: bool = False) -> sqlite3.Connection:
+    if read_only:
+        uri = f"{Path(os.path.abspath(db)).as_uri()}?mode=ro"
+        return sqlite3.connect(uri, uri=True)
     return sqlite3.connect(db)
 
 
@@ -185,6 +197,30 @@ def _with_raw(item: Dict[str, Any], raw_obj: Dict[str, Any], include_raw: bool) 
     return item
 
 
+def _dedupe_texts(chunks: List[str]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        t = chunk.strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def _message_texts(payload: Dict[str, Any], *, input_mode: bool = False) -> List[str]:
+    preferred_types = {"input_text"} if input_mode else {"output_text"}
+    chunks = _text_from_content(payload.get("content"), preferred_types)
+    if not chunks:
+        chunks = _text_from_content(payload.get("content"), None)
+    for key in ("message", "text", "output_text"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            chunks.append(val.strip())
+    return _dedupe_texts(chunks)
+
+
 def _legacy_messages(conn: sqlite3.Connection, thread_id: str) -> Tuple[Optional[str], List[Dict[str, str]]]:
     tables = [r[0] for r in conn.execute("select name from sqlite_master where type='table' order by name").fetchall()]
     msg_table = None
@@ -224,8 +260,13 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
         "turn_context": [],
         "user_messages": [],
         "assistant_messages": [],
+        "event_msg_user_messages": [],
+        "event_msg_assistant_messages": [],
         "tool_calls": [],
         "tool_outputs": [],
+        "reasoning": [],
+        "compaction": [],
+        "context_compaction": [],
         "envelope_counts": {},
         "unknown_envelopes": [],
         "unknown_events": [],
@@ -285,7 +326,7 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
                 if pt == "user_message":
                     text = str(payload.get("message", "")).strip()
                     if text:
-                        parsed["user_messages"].append(
+                        parsed["event_msg_user_messages"].append(
                             _with_raw(
                                 {"line": idx, "source": "event_msg", "payload_type": pt, "text": text},
                                 obj,
@@ -296,7 +337,7 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
                 if pt in {"assistant_message", "assistant_response"}:
                     text = str(payload.get("message", "")).strip()
                     if text:
-                        parsed["assistant_messages"].append(
+                        parsed["event_msg_assistant_messages"].append(
                             _with_raw(
                                 {"line": idx, "source": "event_msg", "payload_type": pt, "text": text},
                                 obj,
@@ -352,10 +393,7 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
                 pt = str(payload.get("type", "")).strip().lower()
                 if pt == "message":
                     role = str(payload.get("role", "")).strip().lower()
-                    input_chunks = _text_from_content(payload.get("content"), {"input_text"})
-                    output_chunks = _text_from_content(payload.get("content"), {"output_text"})
-                    fallback_chunks = _text_from_content(payload.get("content"), None)
-                    chunks = input_chunks or output_chunks or fallback_chunks
+                    chunks = _message_texts(payload, input_mode=(role == "user"))
                     if not chunks:
                         continue
                     target = None
@@ -381,6 +419,17 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
                             )
                         )
                     continue
+                if pt == "agent_message":
+                    chunks = _message_texts(payload, input_mode=False)
+                    for text in chunks:
+                        parsed["assistant_messages"].append(
+                            _with_raw(
+                                {"line": idx, "source": "response_item", "payload_type": pt, "role": "assistant", "text": text},
+                                obj,
+                                include_raw,
+                            )
+                        )
+                    continue
                 if pt in {"function_call", "tool_call"}:
                     parsed["tool_calls"].append(
                         _with_raw(
@@ -396,6 +445,27 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
                         )
                     )
                     continue
+                if pt in {
+                    "local_shell_call",
+                    "tool_search_call",
+                    "custom_tool_call",
+                    "web_search_call",
+                    "image_generation_call",
+                }:
+                    parsed["tool_calls"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "response_item",
+                                "payload_type": pt,
+                                "name": str(payload.get("name", payload.get("tool_name", pt))).strip(),
+                                "arguments": payload.get("arguments", payload.get("input")),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
                 if pt in {"function_call_output", "tool_output", "tool_result"}:
                     parsed["tool_outputs"].append(
                         _with_raw(
@@ -405,6 +475,64 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
                                 "payload_type": pt,
                                 "name": str(payload.get("name", payload.get("tool_name", ""))).strip(),
                                 "output": payload.get("output", payload.get("result")),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                if pt in {"tool_search_output", "custom_tool_call_output"}:
+                    parsed["tool_outputs"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "response_item",
+                                "payload_type": pt,
+                                "name": str(payload.get("name", payload.get("tool_name", pt))).strip(),
+                                "output": payload.get("output", payload.get("result")),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                if pt == "reasoning":
+                    parsed["reasoning"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "response_item",
+                                "payload_type": pt,
+                                "summary": str(payload.get("summary", "")).strip(),
+                                "text": "\n".join(_message_texts(payload, input_mode=False)),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                if pt == "compaction":
+                    parsed["compaction"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "response_item",
+                                "payload_type": pt,
+                                "summary": str(payload.get("summary", "")).strip(),
+                            },
+                            obj,
+                            include_raw,
+                        )
+                    )
+                    continue
+                if pt == "context_compaction":
+                    parsed["context_compaction"].append(
+                        _with_raw(
+                            {
+                                "line": idx,
+                                "source": "response_item",
+                                "payload_type": pt,
+                                "summary": str(payload.get("summary", "")).strip(),
                             },
                             obj,
                             include_raw,
@@ -427,6 +555,13 @@ def _parse_rollout_jsonl(path: str, include_raw: bool = False) -> Dict[str, obje
                     include_raw,
                 )
             )
+
+    if not parsed["user_messages"]:
+        parsed["user_messages"] = list(parsed["event_msg_user_messages"])
+    if not parsed["assistant_messages"]:
+        parsed["assistant_messages"] = list(parsed["event_msg_assistant_messages"])
+    parsed.pop("event_msg_user_messages", None)
+    parsed.pop("event_msg_assistant_messages", None)
 
     return parsed
 
@@ -687,6 +822,9 @@ def cmd_export_thread(args: argparse.Namespace) -> int:
             f.write(f"- assistant_messages: {len(rollout_parsed['assistant_messages'])}\n")
             f.write(f"- tool_calls: {len(rollout_parsed['tool_calls'])}\n")
             f.write(f"- tool_outputs: {len(rollout_parsed['tool_outputs'])}\n")
+            f.write(f"- reasoning: {len(rollout_parsed['reasoning'])}\n")
+            f.write(f"- compaction: {len(rollout_parsed['compaction'])}\n")
+            f.write(f"- context_compaction: {len(rollout_parsed['context_compaction'])}\n")
             f.write(f"- unknown_envelopes: {len(rollout_parsed['unknown_envelopes'])}\n")
             f.write(f"- unknown_events: {len(rollout_parsed['unknown_events'])}\n")
 
@@ -697,6 +835,9 @@ def cmd_export_thread(args: argparse.Namespace) -> int:
                 ("Assistant messages", "assistant_messages"),
                 ("Tool calls", "tool_calls"),
                 ("Tool outputs", "tool_outputs"),
+                ("Reasoning", "reasoning"),
+                ("Compaction", "compaction"),
+                ("Context compaction", "context_compaction"),
                 ("Unknown envelopes", "unknown_envelopes"),
                 ("Unknown events", "unknown_events"),
             ]:
@@ -738,7 +879,7 @@ def cmd_export_thread(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     root = _expand(args.root)
-    dbs = _find_state_dbs(root)
+    dbs = _find_state_dbs(root, audit_mode=True)
     if not dbs:
         print(f"no sqlite dbs found under: {root}")
         return 1
@@ -746,44 +887,48 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     referenced_safe: set[str] = set()
     for db in dbs:
         print(f"\nDB: {db}")
-        with _conn(db) as conn:
-            if not _has_table(conn, "threads"):
-                print("threads table: missing")
-                continue
-            cols = _cols(conn, "threads")
-            print(f"threads schema ({len(cols)} cols): {', '.join(cols)}")
+        try:
+            with _conn(db, read_only=True) as conn:
+                if not _has_table(conn, "threads"):
+                    print("threads table: missing")
+                    continue
+                cols = _cols(conn, "threads")
+                print(f"threads schema ({len(cols)} cols): {', '.join(cols)}")
 
-            for c in ["model_provider", "source", "thread_source", "history_mode", "archived"]:
-                if c in cols:
-                    print(f"{c} distribution:")
-                    d = _distribution(conn, "threads", c)
-                    for k, v in d.items():
-                        label = k if k else "(NULL/empty)"
-                        print(f"  {label}: {v}")
+                for c in ["model_provider", "source", "thread_source", "history_mode", "archived"]:
+                    if c in cols:
+                        print(f"{c} distribution:")
+                        d = _distribution(conn, "threads", c)
+                        for k, v in d.items():
+                            label = k if k else "(NULL/empty)"
+                            print(f"  {label}: {v}")
 
-            if "rollout_path" in cols:
-                rows = _thread_rollout_rows(conn)
-                audit = _audit_rollout_rows(db, rows)
-                rc = audit["counts"]
-                referenced_safe.update(audit["referenced_safe"])
-                print("rollout validation:")
-                print(f"  exists: {int(rc.get('exists', 0))}")
-                print(f"  missing: {int(rc.get('missing', 0))}")
-                print(f"  empty: {int(rc.get('empty', 0))}")
-                print(f"  unsafe_relative_path: {int(rc.get('unsafe', 0))}")
+                if "rollout_path" in cols:
+                    rows = _thread_rollout_rows(conn)
+                    audit = _audit_rollout_rows(db, rows)
+                    rc = audit["counts"]
+                    referenced_safe.update(audit["referenced_safe"])
+                    print("rollout validation:")
+                    print(f"  exists: {int(rc.get('exists', 0))}")
+                    print(f"  missing: {int(rc.get('missing', 0))}")
+                    print(f"  empty: {int(rc.get('empty', 0))}")
+                    print(f"  unsafe_relative_path: {int(rc.get('unsafe', 0))}")
 
-                missing = audit["missing"]
-                if missing:
-                    print("missing rollout files:")
-                    for thread_id, p in missing[:50]:
-                        print(f"  thread={thread_id} -> {p}")
-                unsafe = audit["unsafe"]
-                if unsafe:
-                    print("unsafe rollout paths:")
-                    for thread_id, p in unsafe[:50]:
-                        print(f"  thread={thread_id} -> {p}")
-            else:
-                print("rollout validation: rollout_path column not present")
+                    missing = audit["missing"]
+                    if missing:
+                        print("missing rollout files:")
+                        for thread_id, p in missing[:50]:
+                            print(f"  thread={thread_id} -> {p}")
+                    unsafe = audit["unsafe"]
+                    if unsafe:
+                        print("unsafe rollout paths:")
+                        for thread_id, p in unsafe[:50]:
+                            print(f"  thread={thread_id} -> {p}")
+                else:
+                    print("rollout validation: rollout_path column not present")
+        except (sqlite3.Error, OSError) as e:
+            print(f"skipping unreadable sqlite: {e}")
+            continue
 
     rollout_files = _discover_rollout_files(root)
     rollout_keys = {os.path.normcase(os.path.abspath(p)) for p in rollout_files}
